@@ -37,6 +37,7 @@ class Model:
         self._tasks: list[Task] = []
         self._modes: list[Mode] = []
         self._constraints = Constraints()
+        self._flows: dict[int, str] = {}
         self._objective: Objective = Objective(weight_makespan=1)
 
         self._id2job: dict[int, int] = {}
@@ -77,6 +78,14 @@ class Model:
         Returns the constraints in this model.
         """
         return self._constraints
+
+    @property
+    def flow_nodes(self) -> dict[int, str]:
+        """
+        Returns the dictionary mapping task indices to flow roles.
+        Each value is one of: 'source', 'sink', or 'intermediate'.
+        """
+        return self._flows
 
     @property
     def objective(self) -> Objective:
@@ -125,6 +134,7 @@ class Model:
                 earliest_end=task.earliest_end,
                 latest_end=task.latest_end,
                 fixed_duration=task.fixed_duration,
+                optional=task.optional,
                 name=task.name,
             )
 
@@ -167,6 +177,15 @@ class Model:
                 duration=duration,
             )
 
+        for idx, flow in data.flows.items():
+            if flow == "source":
+                model.mark_flow_source(tasks[idx])
+            if flow == "sink":
+                model.mark_flow_sink(tasks[idx])
+            if flow == "intermediate":
+                model.mark_flow_intermediate(tasks[idx])
+
+
         model.set_objective(
             weight_makespan=data.objective.weight_makespan,
             weight_tardy_jobs=data.objective.weight_tardy_jobs,
@@ -189,6 +208,7 @@ class Model:
             tasks=self.tasks,
             modes=self.modes,
             constraints=self.constraints,
+            flows=self._flows,
             objective=self.objective,
         )
 
@@ -251,6 +271,7 @@ class Model:
         earliest_end: int = 0,
         latest_end: int = MAX_VALUE,
         fixed_duration: bool = True,
+        optional: bool = False,
         name: str = "",
     ) -> Task:
         """
@@ -264,6 +285,7 @@ class Model:
             earliest_end,
             latest_end,
             fixed_duration,
+            optional,
             name,
         )
 
@@ -403,6 +425,27 @@ class Model:
         self._constraints._setup_times.append(constraint)
 
         return constraint
+
+    def mark_flow_source(self, task: Task) -> None:
+        """
+        Marks the given task as a flow source.
+        """
+        task_idx = self._id2task[id(task)]
+        self._flows[task_idx] = 'source'
+
+    def mark_flow_sink(self, task: Task) -> None:
+        """
+        Marks the given task as a flow sink.
+        """
+        task_idx = self._id2task[id(task)]
+        self._flows[task_idx] = 'sink'
+
+    def mark_flow_intermediate(self, task: Task) -> None:
+        """
+        Marks the given task as a flow intermediate node.
+        """
+        task_idx = self._id2task[id(task)]
+        self._flows[task_idx] = 'intermediate'
 
     def set_objective(
         self,

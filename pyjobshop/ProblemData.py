@@ -240,6 +240,8 @@ class Task:
         resource). If the duration is not fixed, then the task duration
         can take longer than the processing time, e.g., due to blocking.
         Default ``True``.
+    optional
+        Whether the task is optional. Default ``False``.
     name
         Name of the task.
     """
@@ -252,6 +254,7 @@ class Task:
         earliest_end: int = 0,
         latest_end: int = MAX_VALUE,
         fixed_duration: bool = True,
+        optional: bool = False,
         name: str = "",
     ):
         if earliest_start > latest_start:
@@ -266,6 +269,7 @@ class Task:
         self._earliest_end = earliest_end
         self._latest_end = latest_end
         self._fixed_duration = fixed_duration
+        self._optional = optional
         self._name = name
 
     @property
@@ -311,6 +315,13 @@ class Task:
         """
         return self._fixed_duration
 
+    @property
+    def optional(self) -> bool:
+        """
+        Whether the task is optional.
+        """
+        return self._optional
+    
     @property
     def name(self) -> str:
         """
@@ -706,6 +717,7 @@ class ProblemData:
         tasks: list[Task],
         modes: list[Mode],
         constraints: Optional[Constraints] = None,
+        flows: Optional[dict[int, str]] = None,
         objective: Optional[Objective] = None,
     ):
         self._jobs = jobs
@@ -715,6 +727,7 @@ class ProblemData:
         self._constraints = (
             constraints if constraints is not None else Constraints()
         )
+        self._flows = flows
         self._objective = (
             objective
             if objective is not None
@@ -878,6 +891,13 @@ class ProblemData:
         Returns the constraints of this problem instance.
         """
         return self._constraints
+    
+    @property
+    def flows(self) -> dict[int, str]:
+        """
+        Returns the flow constraints of this problem instance.
+        """
+        return self._flows
 
     @property
     def objective(self) -> Objective:

@@ -2,6 +2,7 @@ import numpy as np
 from ortools.sat.python.cp_model import CpModel, LinearExpr
 
 import pyjobshop.solvers.utils as utils
+from pyjobshop.constants import MAX_VALUE
 from pyjobshop.ProblemData import (
     Machine,
     NonRenewable,
@@ -25,6 +26,7 @@ class Constraints:
         self._task_vars = variables.task_vars
         self._mode_vars = variables.mode_vars
         self._sequence_vars = variables.sequence_vars
+        self._flow_vars = variables.flow_vars
 
     def _job_spans_tasks(self):
         """
@@ -34,6 +36,30 @@ class Constraints:
 
         for idx, job in enumerate(data.jobs):
             job_var = self._job_vars[idx]
+            task_starts = []
+            task_ends = []
+
+            for task in job.tasks:
+                task_var = self._task_vars[task]
+
+                if data.tasks[task].optional:
+                    # When tasks are absent, they should not restrict the job's
+                    # start and end times.
+                    task_start = model.new_int_var(0, MAX_VALUE, "")
+                    task_end = model.new_int_var(0, MAX_VALUE, "")
+
+                    expr = task_start == task_var.start
+                    model.add(expr).only_enforce_if(task_var.present)
+
+                    expr = task_end == task_var.end
+                    model.add(expr).only_enforce_if(task_var.present)
+                else:
+                    task_start = task_var.start
+                    task_end = task_var.end
+
+                task_starts.append(task_start)
+                task_ends.append(task_end)
+
             task_starts = [self._task_vars[task].start for task in job.tasks]
             task_ends = [self._task_vars[task].end for task in job.tasks]
 
@@ -42,30 +68,32 @@ class Constraints:
 
     def _select_one_mode(self):
         """
-        Selects one mode for each task, ensuring that each task performs
-        exactly one mode.
+        Selects one mode for each task if and only if the task is present,
+        and synchronizes the selected mode variable with the task variable.
         """
         model, data = self._model, self._data
         task2modes = utils.task2modes(data)
 
         for task in range(data.num_tasks):
-            presences = []
-            main = self._task_vars[task]
+            task_var = self._task_vars[task]
+
+            # Select one mode if and only if task is present.
+            presences = [self._mode_vars[m].present for m in task2modes[task]]
+            model.add(sum(presences) == task_var.present)
 
             for mode in task2modes[task]:
-                opt = self._mode_vars[mode]
-                present = opt.present
-                presences.append(present)
+                # Synchronize task var with mode var if both are present.
+                mode_var = self._mode_vars[mode]
+                both_present = [task_var.present, mode_var.present]
 
-                # Sync each optional interval variable with the main variable.
-                model.add(main.start == opt.start)
-                model.add(main.end == opt.end)
-                model.add(main.duration == opt.duration).only_enforce_if(
-                    present
-                )
+                sync_start = task_var.start == mode_var.start
+                model.add(sync_start).only_enforce_if(both_present)
 
-            # Select exactly one optional interval variable for each task.
-            model.add_exactly_one(presences)
+                sync_duration = task_var.duration == mode_var.duration
+                model.add(sync_duration).only_enforce_if(both_present)
+
+                sync_end = task_var.end == mode_var.end
+                model.add(sync_end).only_enforce_if(both_present)
 
     def _machines_no_overlap(self):
         """
@@ -121,24 +149,32 @@ class Constraints:
         model, data = self._model, self._data
 
         for idx1, idx2, delay in data.constraints.start_before_start:
-            expr1 = self._task_vars[idx1].start + delay
-            expr2 = self._task_vars[idx2].start
-            model.add(expr1 <= expr2)
+            task_var1 = self._task_vars[idx1]
+            task_var2 = self._task_vars[idx2]
+            both_present = [task_var1.present, task_var2.present]
+            expr = task_var1.start + delay <= task_var2.start
+            model.add(expr).only_enforce_if(both_present)
 
         for idx1, idx2, delay in data.constraints.start_before_end:
-            expr1 = self._task_vars[idx1].start + delay
-            expr2 = self._task_vars[idx2].end
-            model.add(expr1 <= expr2)
+            task_var1 = self._task_vars[idx1]
+            task_var2 = self._task_vars[idx2]
+            both_present = [task_var1.present, task_var2.present]
+            expr = task_var1.start + delay <= task_var2.end
+            model.add(expr).only_enforce_if(both_present)
 
         for idx1, idx2, delay in data.constraints.end_before_start:
-            expr1 = self._task_vars[idx1].end + delay
-            expr2 = self._task_vars[idx2].start
-            model.add(expr1 <= expr2)
+            task_var1 = self._task_vars[idx1]
+            task_var2 = self._task_vars[idx2]
+            both_present = [task_var1.present, task_var2.present]
+            expr = task_var1.end + delay <= task_var2.start
+            model.add(expr).only_enforce_if(both_present)
 
         for idx1, idx2, delay in data.constraints.end_before_end:
-            expr1 = self._task_vars[idx1].end + delay
-            expr2 = self._task_vars[idx2].end
-            model.add(expr1 <= expr2)
+            task_var1 = self._task_vars[idx1]
+            task_var2 = self._task_vars[idx2]
+            both_present = [task_var1.present, task_var2.present]
+            expr = task_var1.end + delay <= task_var2.end
+            model.add(expr).only_enforce_if(both_present)
 
     def _identical_and_different_resource_constraints(self):
         """
@@ -198,6 +234,52 @@ class Constraints:
                     both_present = [var1.present, var2.present]
 
                     model.add(arc == 1).only_enforce_if(both_present)
+    
+    def _flow_constraints(self):
+        """
+        Adds flow conservation constraints for each job based on the flow variables
+        assigned to each 'add_end_before_start' precedence constraint.
+        
+        Assumes:
+        - data.flows is a dictionary mapping task indices to one of:
+            'source', 'sink', or 'intermediate'.
+        - data.constraints.end_before_start is a list of precedence constraints
+            where each constraint has attributes `task1` and `task2` (source and target tasks).
+        """
+        model, data = self._model, self._data
+
+        if not data.flows.items():
+            return
+
+        # For each job, build the incoming and outgoing arc lists per task.
+        for job in data.jobs:
+            tasks_in_job = set(job.tasks)  # set for fast lookup
+
+            # Initialize dictionaries for arcs entering and leaving each task.
+            inflow = {t: set() for t in tasks_in_job}
+            outflow = {t: set() for t in tasks_in_job}
+
+            # Loop over all 'end_before_start' constraints.
+            # The order of these constraints corresponds to the order of flow variables.
+            for k, constraint in enumerate(data.constraints.end_before_start):
+                # Consider only arcs connecting tasks in the current job.
+                if constraint.task1 in tasks_in_job and constraint.task2 in tasks_in_job:
+                    outflow[constraint.task1].add(self._flow_vars[k])
+                    inflow[constraint.task2].add(self._flow_vars[k])
+
+            # For each task in the job, add a flow conservation constraint.
+            for t in tasks_in_job:
+                flow_in = sum(inflow[t])
+                flow_out = sum(outflow[t])
+                # Get the assigned role (if any) from the flow data.
+                role = data.flows.get(t, None)
+                if role == "source":
+                    model.add(flow_out == 1)
+                elif role == "sink":
+                    model.add(flow_in == 1)
+                elif role == "intermediate":
+                    model.add(flow_in == self._task_vars[t].present)
+                    model.add(flow_out == self._task_vars[t].present)
 
     def _circuit_constraints(self):
         """
@@ -259,6 +341,7 @@ class Constraints:
         self._identical_and_different_resource_constraints()
         self._activate_setup_times()
         self._consecutive_constraints()
+        self._flow_constraints()
 
         # From here onwards we know which sequence constraints are active.
         self._circuit_constraints()

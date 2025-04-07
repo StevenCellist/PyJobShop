@@ -27,6 +27,7 @@ class Constraints:
         self._task_vars = variables.task_vars
         self._mode_vars = variables.mode_vars
         self._sequence_vars = variables.sequence_vars
+        self._flow_vars = variables.flow_vars
 
     def _job_spans_tasks(self):
         """
@@ -182,6 +183,52 @@ class Constraints:
                     var2 = self._mode_vars[mode2]
 
                     model.add(cpo.previous(seq_var, var1, var2))
+    
+    def _flow_constraints(self):
+        """
+        Adds flow conservation constraints for each job based on the flow variables
+        assigned to each 'add_end_before_start' precedence constraint.
+        
+        Assumes:
+        - data.flows is a dictionary mapping task indices to one of:
+            'source', 'sink', or 'intermediate'.
+        - data.constraints.end_before_start is a list of precedence constraints
+            where each constraint has attributes `task1` and `task2` (source and target tasks).
+        """
+        model, data = self._model, self._data
+
+        if not data.flows.items():
+            return
+
+        # For each job, build the incoming and outgoing arc lists per task.
+        for job in data.jobs:
+            tasks_in_job = set(job.tasks)  # set for fast lookup
+
+            # Initialize dictionaries for arcs entering and leaving each task.
+            inflow = {t: set() for t in tasks_in_job}
+            outflow = {t: set() for t in tasks_in_job}
+
+            # Loop over all 'end_before_start' constraints.
+            # The order of these constraints corresponds to the order of flow variables.
+            for k, constraint in enumerate(data.constraints.end_before_start):
+                # Consider only arcs connecting tasks in the current job.
+                if constraint.task1 in tasks_in_job and constraint.task2 in tasks_in_job:
+                    outflow[constraint.task1].add(self._flow_vars[k])
+                    inflow[constraint.task2].add(self._flow_vars[k])
+
+            # For each task in the job, add a flow conservation constraint.
+            for t in tasks_in_job:
+                flow_in = cpo.sum(inflow[t])
+                flow_out = cpo.sum(outflow[t])
+                # Get the assigned role (if any) from the flow data.
+                role = data.flows.get(t, None)
+                if role == "source":
+                    model.add(flow_out == 1)
+                elif role == "sink":
+                    model.add(flow_in == 1)
+                elif role == "intermediate":
+                    model.add(flow_in == cpo.presence_of(self._task_vars[t]))
+                    model.add(flow_out == cpo.presence_of(self._task_vars[t]))
 
     def add_constraints(self):
         """
@@ -195,3 +242,4 @@ class Constraints:
         self._timing_constraints()
         self._identical_and_different_resource_constraints()
         self._consecutive_constraints()
+        self._flow_constraints()

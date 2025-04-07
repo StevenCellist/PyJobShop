@@ -3,6 +3,7 @@ from docplex.cp.expression import (
     CpoSequenceVar,
     interval_var,
     sequence_var,
+    binary_var,
 )
 from docplex.cp.model import CpoModel
 
@@ -25,6 +26,7 @@ class Variables:
         self._task_vars = self._make_task_variables()
         self._mode_vars = self._make_mode_variables()
         self._sequence_vars = self._make_sequence_variables()
+        self._flow_vars = self._make_flow_variables()
 
     @property
     def job_vars(self) -> list[CpoIntervalVar]:
@@ -54,6 +56,13 @@ class Variables:
         """
         return self._sequence_vars
 
+    @property
+    def flow_vars(self) -> list:
+        """
+        Returns the flow variables.
+        """
+        return self._flow_vars
+
     def _make_job_variables(self) -> list[CpoIntervalVar]:
         """
         Creates an interval variable for each job.
@@ -80,7 +89,7 @@ class Variables:
         task_durations = utils.compute_task_durations(self._data)
 
         for idx, task in enumerate(data.tasks):
-            var = interval_var(name=f"T{task}")
+            var = interval_var(optional=task.optional, name=f"T{task}")
 
             var.set_start_min(task.earliest_start)
             var.set_start_max(min(task.latest_start, MAX_VALUE))
@@ -144,6 +153,22 @@ class Variables:
 
         return variables
 
+    def _make_flow_variables(self) -> list:
+        """
+        Creates a binary flow variable for each add_end_before_start precedence constraint.
+        These flow variables are associated with each 'end_before_start' constraint.
+        """
+        variables = []
+        if self._data.flows.items():
+            # Iterate over each 'end_before_start' constraint in the problem data.
+            for constraint in self._data.constraints.end_before_start:
+                # Create a binary variable for this precedence constraint.
+                flow_var = binary_var(name=f"F_{constraint.task1}_{constraint.task2}")
+                variables.append(flow_var)
+                self._model.add(flow_var)
+        
+        return variables
+
     def warmstart(self, solution: Solution):
         """
         Warmstarts the variables based on the given solution.
@@ -156,8 +181,8 @@ class Variables:
             job_var = self.job_vars[idx]
             sol_tasks = [solution.tasks[task] for task in job.tasks]
 
-            job_start = min(task.start for task in sol_tasks)
-            job_end = max(task.end for task in sol_tasks)
+            job_start = min(task.start for task in sol_tasks if task.present)
+            job_end = max(task.end for task in sol_tasks if task.present)
 
             stp.add_interval_var_solution(
                 job_var, start=job_start, end=job_end

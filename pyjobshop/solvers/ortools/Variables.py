@@ -52,12 +52,15 @@ class TaskVar:
         The duration variable of the interval.
     end
         The end time variable of the interval.
+    present
+        The boolean variable indicating whether the interval is present.
     """
 
     interval: IntervalVar
     start: IntVar
     duration: IntVar
     end: IntVar
+    present: BoolVarT
 
 
 @dataclass
@@ -152,6 +155,7 @@ class Variables:
         self._task_vars = self._make_task_variables()
         self._mode_vars = self._make_mode_variables()
         self._sequence_vars = self._make_sequence_variables()
+        self._flow_vars = self._make_flow_variables()
 
     @property
     def job_vars(self) -> list[JobVar]:
@@ -180,6 +184,13 @@ class Variables:
         Returns the sequence variables.
         """
         return self._sequence_vars
+
+    @property
+    def flow_vars(self) -> list:
+        """
+        Returns the flow variables.
+        """
+        return self._flow_vars
 
     def _make_job_variables(self) -> list[JobVar]:
         """
@@ -242,10 +253,15 @@ class Variables:
                 ub=min(task.latest_end, MAX_VALUE),
                 name=f"{name}_end",
             )
-            interval = model.new_interval_var(
-                start, duration, end, f"interval_{task}"
+            present = (
+                model.new_bool_var(f"{name}_present")
+                if task.optional
+                else model.new_constant(True)
             )
-            variables.append(TaskVar(interval, start, duration, end))
+            interval = model.new_optional_interval_var(
+                start, duration, end, present, f"interval_{task}"
+            )
+            variables.append(TaskVar(interval, start, duration, end, present))
 
         return variables
 
@@ -306,6 +322,24 @@ class Variables:
 
         return variables
 
+    def _make_flow_variables(self) -> list:
+        """
+        Creates a binary flow variable for each add_end_before_start precedence constraint.
+        These flow variables are associated with each 'end_before_start' constraint.
+        """
+        model, data = self._model, self._data
+
+        variables = []
+        if data.flows.items():
+            # Iterate over each 'end_before_start' constraint in the problem data.
+            for constraint in self._data.constraints.end_before_start:
+                # Create a binary variable for this precedence constraint.
+                flow_var = model.new_bool_var(name=f"F_{constraint.task1}_{constraint.task2}")
+                variables.append(flow_var)
+                # self._model.add(flow_var)
+        
+        return variables
+
     def warmstart(self, solution: Solution):
         """
         Warmstarts the variables based on the given solution.
@@ -338,6 +372,11 @@ class Variables:
             model.add_hint(task_var.start, sol_task.start)
             model.add_hint(task_var.duration, sol_task.end - sol_task.start)
             model.add_hint(task_var.end, sol_task.end)
+
+            if data.tasks[idx].optional:
+                # OR-Tools complains about adding presence hints to interval
+                # variables that are always present (i.e., non-optional tasks).
+                model.add_hint(task_var.present, sol_task.present)
 
         for idx in range(len(data.modes)):
             var = mode_vars[idx]
