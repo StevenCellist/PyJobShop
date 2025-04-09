@@ -72,6 +72,7 @@ class Solver:
         self,
         time_limit: float = float("inf"),
         display: bool = False,
+        log_file = None,
         num_workers: Optional[int] = None,
         initial_solution: Optional[Solution] = None,
         **kwargs,
@@ -113,6 +114,18 @@ class Solver:
         cp_solver = CpSolver()
         for key, value in params.items():
             setattr(cp_solver.parameters, key, value)
+
+        if log_file:
+            cp_solver.parameters.log_search_progress = True
+            cp_solver.parameters.log_to_stdout = False
+
+            def log_callback(text):
+                log_file.write(text)
+
+            cp_solver.log_callback = log_callback
+        else:
+            cp_solver.parameters.log_search_progress = display
+            cp_solver.parameters.log_to_stdout = display
 
         status_code = cp_solver.solve(self._model)
         status = cp_solver.status_name(status_code)

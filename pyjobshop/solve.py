@@ -11,6 +11,7 @@ def solve(
     solver: str = "ortools",
     time_limit: float = float("inf"),
     display: bool = False,
+    log_file = None,
     num_workers: Optional[int] = None,
     initial_solution: Optional[Solution] = None,
     **kwargs,
@@ -56,6 +57,7 @@ def solve(
         return ortools.solve(
             time_limit,
             display,
+            log_file,
             num_workers,
             initial_solution,
             **kwargs,
@@ -69,6 +71,7 @@ def solve(
         return cpoptimizer.solve(
             time_limit,
             display,
+            log_file,
             num_workers,
             initial_solution,
             **kwargs,

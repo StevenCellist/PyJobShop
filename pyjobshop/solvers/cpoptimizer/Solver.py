@@ -72,6 +72,7 @@ class Solver:
         self,
         time_limit: float = float("inf"),
         display: bool = False,
+        log_file = None,
         num_workers: Optional[int] = None,
         initial_solution: Optional[Solution] = None,
         **kwargs,
@@ -108,6 +109,13 @@ class Solver:
             "Workers": num_workers if num_workers is not None else "Auto",
         }
         params.update(kwargs)  # this will override existing parameters!
+
+        from docplex.cp.config import context
+        if log_file:
+            context.solver.log_output = log_file
+        else:
+            import sys
+            context.solver.log_output = sys.stdout
 
         cp_result: CpoSolveResult = self._model.solve(**params)  # type: ignore
         status = cp_result.get_solve_status()
